@@ -58,9 +58,5 @@ func (p *Pane) tty() string {
 	if p.ptmx == nil {
 		return ""
 	}
-	n, err := unix.IoctlGetInt(int(p.ptmx.Fd()), unix.TIOCGPTN)
-	if err != nil {
-		return ""
-	}
-	return fmt.Sprintf("/dev/pts/%d", n)
+	return ptsName(p.ptmx)
 }

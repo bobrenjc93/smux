@@ -103,7 +103,7 @@ func runControlClient(sock string, attach bool) int {
 	oldState, rawErr := makeRaw(int(os.Stdin.Fd()))
 	restore := func() {
 		if rawErr == nil {
-			unix.IoctlSetTermios(int(os.Stdin.Fd()), unix.TCSETS, oldState)
+			unix.IoctlSetTermios(int(os.Stdin.Fd()), ioctlWriteTermios, oldState)
 		}
 	}
 	defer restore()
@@ -150,7 +150,7 @@ func runOneShot(sock string, line string) int {
 }
 
 func makeRaw(fd int) (*unix.Termios, error) {
-	old, err := unix.IoctlGetTermios(fd, unix.TCGETS)
+	old, err := unix.IoctlGetTermios(fd, ioctlReadTermios)
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +163,7 @@ func makeRaw(fd int) (*unix.Termios, error) {
 	raw.Cflag |= unix.CS8
 	raw.Cc[unix.VMIN] = 1
 	raw.Cc[unix.VTIME] = 0
-	if err := unix.IoctlSetTermios(fd, unix.TCSETS, &raw); err != nil {
+	if err := unix.IoctlSetTermios(fd, ioctlWriteTermios, &raw); err != nil {
 		return nil, err
 	}
 	return old, nil

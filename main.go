@@ -11,6 +11,10 @@ import (
 	"os"
 )
 
+// version is stamped by the release build via
+// -ldflags "-X main.version=v1.2.3".
+var version = "dev"
+
 func usage() {
 	fmt.Fprintf(os.Stderr, `usage:
   smux -CC            create a new session and attach in control mode
@@ -21,6 +25,7 @@ func usage() {
 
 Options:
   -L <name>   use a distinct socket name (default "default")
+  -V          print the smux version
 `)
 	os.Exit(1)
 }
@@ -43,6 +48,9 @@ func main() {
 			socketName = args[i]
 		case "--server":
 			runServer(socketPath(socketName))
+			return
+		case "-V", "--version":
+			fmt.Printf("smux %s\n", version)
 			return
 		case "-h", "--help":
 			usage()
