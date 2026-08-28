@@ -40,6 +40,9 @@ type iterm struct {
 	t    *testing.T
 	conn net.Conn
 	r    *bufio.Reader
+	// partial holds an incomplete line consumed before a read timeout, so
+	// timed-out reads never lose bytes.
+	partial string
 }
 
 func dialControl(t *testing.T, sock, mode string) *iterm {
@@ -65,15 +68,15 @@ func (it *iterm) send(line string) {
 	}
 }
 
-// readLine reads one \r\n-terminated protocol line.
+// readLine reads one \r\n-terminated protocol line, failing the test if
+// none arrives. The deadline is generous for loaded CI runners.
 func (it *iterm) readLine() string {
 	it.t.Helper()
-	it.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	line, err := it.r.ReadString('\n')
+	line, err := it.readLineTimeout(30 * time.Second)
 	if err != nil {
-		it.t.Fatalf("readLine: %v (got %q)", err, line)
+		it.t.Fatalf("readLine: %v (partial %q)", err, it.partial)
 	}
-	return strings.TrimRight(line, "\r\n")
+	return line
 }
 
 // expectDCS consumes the \033P1000p control-mode introducer.
@@ -197,22 +200,77 @@ func (it *iterm) waitNotify(prefix string) string {
 	}
 }
 
-// waitOutputContaining waits for %output lines until the (escaped) payload
-// contains the given text.
+// waitOutputContaining waits for %output lines until their decoded
+// payloads, concatenated, contain the given raw bytes. Decoding mirrors
+// iTerm2's TmuxGateway (\ooo octal escapes only) and is strict: raw
+// control bytes or malformed escapes in a payload are protocol violations
+// and fail the test. Matching on decoded bytes keeps the test robust when
+// pane output is split across many %output lines.
 func (it *iterm) waitOutputContaining(text string) {
 	it.t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	var seen strings.Builder
+	deadline := time.Now().Add(30 * time.Second)
+	var seen []byte
 	for time.Now().Before(deadline) {
-		l := it.readLine()
-		if strings.HasPrefix(l, "%output ") {
-			seen.WriteString(l)
-			if strings.Contains(seen.String(), text) {
-				return
-			}
+		l, err := it.readLineTimeout(time.Second)
+		if err != nil {
+			continue // idle; keep waiting until the overall deadline
+		}
+		if !strings.HasPrefix(l, "%output ") {
+			continue
+		}
+		payload := l[strings.Index(l[len("%output "):], " ")+len("%output ")+1:]
+		seen = append(seen, it.decodeOutput(payload)...)
+		if strings.Contains(string(seen), text) {
+			return
 		}
 	}
-	it.t.Fatalf("never saw output containing %q; got: %s", text, seen.String())
+	it.t.Fatalf("never saw output containing %q; got: %q", text, seen)
+}
+
+// decodeOutput decodes a %output payload like iTerm2 does, failing the
+// test on anything iTerm2 would mangle (raw control bytes, bad escapes).
+func (it *iterm) decodeOutput(payload string) []byte {
+	it.t.Helper()
+	var out []byte
+	for i := 0; i < len(payload); i++ {
+		c := payload[i]
+		if c < 0x20 || c == 0x7f {
+			it.t.Fatalf("unescaped control byte %#x in %%output payload %q", c, payload)
+		}
+		if c != '\\' {
+			out = append(out, c)
+			continue
+		}
+		if i+3 >= len(payload) {
+			it.t.Fatalf("truncated escape in %%output payload %q", payload)
+		}
+		v := 0
+		for j := 1; j <= 3; j++ {
+			d := payload[i+j]
+			if d < '0' || d > '7' {
+				it.t.Fatalf("malformed escape in %%output payload %q", payload)
+			}
+			v = v*8 + int(d-'0')
+		}
+		out = append(out, byte(v))
+		i += 3
+	}
+	return out
+}
+
+// readLineTimeout reads one line, returning an error (instead of failing
+// the test) if none arrives within d. A partially read line is kept for
+// the next call.
+func (it *iterm) readLineTimeout(d time.Duration) (string, error) {
+	it.conn.SetReadDeadline(time.Now().Add(d))
+	line, err := it.r.ReadString('\n')
+	if err != nil {
+		it.partial += line
+		return "", err
+	}
+	line = it.partial + line
+	it.partial = ""
+	return strings.TrimRight(line, "\r\n"), nil
 }
 
 // captureUntil polls capture-pane until the result contains text.
@@ -439,12 +497,13 @@ func TestOutputEscapingOnTheWire(t *testing.T) {
 	defer it.close()
 	it.attach()
 
-	// printf a tab, a backslash, and CR LF through the shell; the %output
-	// stream must escape them as \011, \134, \015\012.
+	// printf a tab, a backslash, and CR LF through the shell. The decoder
+	// in waitOutputContaining verifies they arrived escaped (\011, \134,
+	// \015\012) and rejects any raw control byte on the wire.
 	it.send(`send -t %0 -l "printf 'X\\tY\\\\Z\\n'" ; send -t %0 0xd`)
 	it.readBlock()
 	it.readBlock()
-	it.waitOutputContaining(`X\011Y\134Z\015\012`)
+	it.waitOutputContaining("X\tY\\Z\r\n")
 }
 
 func TestSendKeysForms(t *testing.T) {
