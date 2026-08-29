@@ -61,6 +61,20 @@ func TestParseCommandLine(t *testing.T) {
 		{``, nil},
 		{`  ;  ; `, nil},
 		{`esc\ aped`, [][]string{{"esc aped"}}},
+		// Dispatcher sends \t escapes inside double-quoted -F formats and
+		// expects server-side decoding to real TABs (its TSV parsing
+		// depends on it).
+		{`list-windows -F "#{window_id}\t#{window_name}"`,
+			[][]string{{"list-windows", "-F", "#{window_id}\t#{window_name}"}}},
+		// Dispatcher's quoteTmuxCommandArgument round-trip fixture:
+		// ~/$HOME/"x"\y \n z \r \t ESC.
+		{`rename-window "\~/\$HOME/\"x\"\\y\nz\r\t\e"`,
+			[][]string{{"rename-window", "~/$HOME/\"x\"\\y\nz\r\t\x1b"}}},
+		// Octal escapes for other control bytes.
+		{`set-buffer -- "a\007b\033c"`,
+			[][]string{{"set-buffer", "--", "a\x07b\x1bc"}}},
+		// Unknown escapes stay literal.
+		{`x "\q\f"`, [][]string{{"x", `\q\f`}}},
 	}
 	for _, c := range cases {
 		if got := parseCommandLine(c.in); !reflect.DeepEqual(got, c.want) {

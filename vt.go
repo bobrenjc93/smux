@@ -21,19 +21,20 @@ type VT struct {
 	alt     []vtLine // alternate screen when active, else nil
 	onAlt   bool
 
-	cx, cy     int  // cursor
-	cursorApp  bool // DECCKM: application cursor keys (affects send-keys)
-	wrapNext   bool
-	savedX     int
-	savedY     int
-	top, bot   int // scroll region, inclusive
-	attr       vtAttr
-	title      string
-	inUTF8     []byte // partial UTF-8 sequence spanning Feed calls
-	state      int
-	escBuf     []byte
-	oscBuf     []byte
-	stTerminal bool // parsing string sequence terminated by ST/BEL
+	cx, cy       int  // cursor
+	cursorApp    bool // DECCKM: application cursor keys (affects send-keys)
+	bracketPaste bool // mode 2004 (affects paste-buffer -p)
+	wrapNext     bool
+	savedX       int
+	savedY       int
+	top, bot     int // scroll region, inclusive
+	attr         vtAttr
+	title        string
+	inUTF8       []byte // partial UTF-8 sequence spanning Feed calls
+	state        int
+	escBuf       []byte
+	oscBuf       []byte
+	stTerminal   bool // parsing string sequence terminated by ST/BEL
 }
 
 type vtAttr struct {
@@ -482,6 +483,8 @@ func (v *VT) dispatchCSI() {
 				switch m {
 				case 1:
 					v.cursorApp = set
+				case 2004:
+					v.bracketPaste = set
 				case 1049, 1047, 47:
 					v.setAltScreen(set)
 				}

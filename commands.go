@@ -43,6 +43,7 @@ var commands = []command{
 	{"list-windows", cmdListWindows},
 	{"new-session", cmdNewSession},
 	{"new-window", cmdNewWindow},
+	{"paste-buffer", cmdPasteBuffer},
 	{"refresh-client", cmdRefreshClient},
 	{"rename-session", cmdRenameSession},
 	{"rename-window", cmdRenameWindow},
@@ -52,6 +53,7 @@ var commands = []command{
 	{"select-pane", cmdSelectPane},
 	{"select-window", cmdSelectWindow},
 	{"send-keys", cmdSendKeys},
+	{"set-buffer", cmdSetBuffer},
 	{"set-hook", cmdNop},
 	{"set-option", cmdSetOption},
 	{"set-window-option", cmdSetOption},
@@ -78,6 +80,7 @@ var aliases = map[string]string{
 	"lsw":       "list-windows",
 	"new":       "new-session",
 	"neww":      "new-window",
+	"pasteb":    "paste-buffer",
 	"refresh":   "refresh-client",
 	"rename":    "rename-session",
 	"renamew":   "rename-window",
@@ -88,6 +91,7 @@ var aliases = map[string]string{
 	"selectw":   "select-window",
 	"send":      "send-keys",
 	"set":       "set-option",
+	"setb":      "set-buffer",
 	"setw":      "set-window-option",
 	"show":      "show-options",
 	"showw":     "show-window-options",
@@ -164,6 +168,7 @@ var valueFlags = map[string]string{
 	"list-windows":        "Ftf",
 	"new-session":         "stncF",
 	"new-window":          "tncF",
+	"paste-buffer":        "bts",
 	"refresh-client":      "CFBArftl",
 	"rename-session":      "t",
 	"rename-window":       "t",
@@ -173,6 +178,7 @@ var valueFlags = map[string]string{
 	"select-pane":         "tT",
 	"select-window":       "t",
 	"send-keys":           "tN",
+	"set-buffer":          "btn",
 	"set-hook":            "t",
 	"set-option":          "t",
 	"set-window-option":   "t",
@@ -390,7 +396,7 @@ func addPaneVars(v map[string]string, s *Server, p *Pane) {
 	v["mouse_all_flag"] = "0"
 	v["mouse_utf8_flag"] = "0"
 	v["mouse_sgr_flag"] = "0"
-	v["bracket_paste_flag"] = "0"
+	v["bracket_paste_flag"] = boolVar(vt.bracketPaste)
 	v["pane_key_mode"] = ""
 	v["origin_flag"] = "0"
 	v["alternate_on"] = boolVar(vt.onAlt)
@@ -562,9 +568,13 @@ func cmdDisplayMessage(s *Server, c *Client, a *cmdArgs) (string, error) {
 	}
 	v := s.baseVars(c)
 	if t := a.val("t"); t != "" {
-		if p, err := s.targetPane(c, t); err == nil {
-			addPaneVars(v, s, p)
+		// An explicit target that doesn't resolve is an error, like tmux.
+		// Dispatcher relies on this to detect windows that no longer exist.
+		p, err := s.targetPane(c, t)
+		if err != nil {
+			return "", err
 		}
+		addPaneVars(v, s, p)
 	} else if c != nil && c.session != nil && c.session.active != nil {
 		addPaneVars(v, s, c.session.active.pane)
 	}
@@ -586,10 +596,24 @@ func cmdNewWindow(s *Server, c *Client, a *cmdArgs) (string, error) {
 		}
 		dir = expandFormat(dir, v)
 	}
+	// -a: insert after the target window (dispatcher's Cmd+T sends
+	// `new-window -a -t @N`) rather than appending at the end.
+	insertAfter := -1
+	if a.has("a") {
+		if anchor, err := s.targetWindow(c, a.val("t")); err == nil {
+			insertAfter = anchor.index()
+		}
+	}
 	prev := sess.active
 	w, err := s.newWindowLocked(sess, dir)
 	if err != nil {
 		return "", err
+	}
+	if insertAfter >= 0 && insertAfter+1 < len(sess.windows)-1 {
+		ws := sess.windows
+		created := ws[len(ws)-1]
+		copy(ws[insertAfter+2:], ws[insertAfter+1:len(ws)-1])
+		ws[insertAfter+1] = created
 	}
 	sess.last = prev
 	s.broadcastLocked(sess, "%%session-window-changed $%d @%d", sess.id, w.id)
@@ -850,6 +874,57 @@ func cmdCapturePane(s *Server, c *Client, a *cmdArgs) (string, error) {
 	o.start, o.haveStart = parseLimit("S")
 	o.end, o.haveEnd = parseLimit("E")
 	return p.capture(o), nil
+}
+
+// cmdSetBuffer stores (or with -a appends to) a named paste buffer.
+// Dispatcher chunks pastes as `set-buffer [-a] -b name -- "data"`.
+func cmdSetBuffer(s *Server, c *Client, a *cmdArgs) (string, error) {
+	if len(a.pos) == 0 {
+		return "", fmt.Errorf("no data specified")
+	}
+	data := a.pos[0]
+	name := a.val("b")
+	if name == "" {
+		name = "buffer0"
+	}
+	if a.has("a") {
+		s.buffers[name] += data
+	} else {
+		s.buffers[name] = data
+	}
+	return "", nil
+}
+
+// cmdPasteBuffer writes a buffer into a pane. With -p, the data is wrapped
+// in bracketed-paste markers if the pane's application has enabled mode
+// 2004 (which is why the VT tracks it); -d deletes the buffer afterwards.
+func cmdPasteBuffer(s *Server, c *Client, a *cmdArgs) (string, error) {
+	name := a.val("b")
+	if name == "" {
+		return "", fmt.Errorf("no buffer specified")
+	}
+	data, ok := s.buffers[name]
+	if !ok {
+		return "", fmt.Errorf("no buffer %s", name)
+	}
+	p, err := s.targetPane(c, a.val("t"))
+	if err != nil {
+		return "", err
+	}
+	if p.dead {
+		return "", fmt.Errorf("pane dead")
+	}
+	if a.has("p") && p.vt.bracketPaste {
+		data = "\x1b[200~" + data + "\x1b[201~"
+	}
+	if _, err := p.ptmx.Write([]byte(data)); err != nil {
+		return "", fmt.Errorf("pane write failed")
+	}
+	if a.has("d") {
+		delete(s.buffers, name)
+	}
+	p.window.session.activity = time.Now()
+	return "", nil
 }
 
 func cmdClearHistory(s *Server, c *Client, a *cmdArgs) (string, error) {

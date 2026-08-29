@@ -32,6 +32,7 @@ type Server struct {
 	nextBlockNum  int // %begin/%end block numbering
 
 	globalOptions map[string]string
+	buffers       map[string]string // paste buffers (set-buffer/paste-buffer)
 
 	logger *log.Logger
 	done   chan struct{}
@@ -78,6 +79,7 @@ func newServer(sock string) (*Server, error) {
 		clients:       make(map[*Client]bool),
 		nextBlockNum:  100,
 		globalOptions: make(map[string]string),
+		buffers:       make(map[string]string),
 		logger:        log.New(logFile, "", log.LstdFlags|log.Lmicroseconds),
 		done:          make(chan struct{}),
 	}
