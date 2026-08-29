@@ -142,6 +142,30 @@ func (s *Server) handleConn(conn net.Conn) {
 	case "oneshot":
 		s.handleOneShot(conn, h.Line)
 	case "new", "attach":
+		// Pre-flight check, answered as a JSON header before any control
+		// mode bytes: failures reach the user as plain terminal text
+		// instead of a swallowed control stream. smux supports at most
+		// one session; `smux -CC` guides toward attaching instead of
+		// silently forking a second one.
+		s.mu.Lock()
+		errMsg := ""
+		if h.Cmd == "new" && len(s.sessions) > 0 {
+			errMsg = "a session already exists; attach with: smux -CC a  " +
+				"(or discard it with: smux kill-server)"
+		}
+		if h.Cmd == "attach" && len(s.sessions) == 0 {
+			errMsg = "no session to attach to; start one with: smux -CC"
+		}
+		s.mu.Unlock()
+		if errMsg != "" {
+			writeHelloReply(conn, helloReply{Error: errMsg})
+			conn.Close()
+			return
+		}
+		if err := writeHelloReply(conn, helloReply{OK: true}); err != nil {
+			conn.Close()
+			return
+		}
 		c := newClient(s, conn, br)
 		s.mu.Lock()
 		s.clients[c] = true
@@ -150,6 +174,19 @@ func (s *Server) handleConn(conn net.Conn) {
 	default:
 		conn.Close()
 	}
+}
+
+// helloReply is the one-line JSON header the server sends before the
+// control-mode stream starts.
+type helloReply struct {
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+}
+
+func writeHelloReply(conn net.Conn, r helloReply) error {
+	b, _ := json.Marshal(r)
+	_, err := conn.Write(append(b, '\n'))
+	return err
 }
 
 func (s *Server) handleOneShot(conn net.Conn, line string) {

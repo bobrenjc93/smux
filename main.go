@@ -17,11 +17,12 @@ var version = "dev"
 
 func usage() {
 	fmt.Fprintf(os.Stderr, `usage:
-  smux -CC            create a new session and attach in control mode
-  smux -CC a[ttach]   attach to the most recent session in control mode
+  smux -CC            start the session and attach in control mode
+                      (errors if a session already exists: attach instead)
+  smux -CC a[ttach]   attach to the existing session in control mode
   smux --server       run the server (normally started automatically)
-  smux kill-server    terminate the server and all sessions
-  smux ls             list sessions
+  smux kill-server    terminate the server and the session
+  smux ls             show the session
 
 Options:
   -L <name>   use a distinct socket name (default "default")

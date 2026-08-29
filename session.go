@@ -63,6 +63,12 @@ type Pane struct {
 }
 
 func (s *Server) newSessionLocked() (*Session, error) {
+	// smux is deliberately single-session: one session per server, always
+	// reattached, never forked. (Also closes the pre-flight race of two
+	// simultaneous `smux -CC` invocations.)
+	if len(s.sessions) > 0 {
+		return nil, fmt.Errorf("a session already exists; attach with: smux -CC a")
+	}
 	sess := &Session{
 		id:       s.nextSessionID,
 		name:     fmt.Sprintf("%d", s.nextSessionID),

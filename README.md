@@ -12,11 +12,16 @@ integration exercises.
 ## Usage
 
 ```sh
-smux -CC        # create a new session (starts the server if needed)
-smux -CC a      # attach to the most recent session
-smux ls         # list sessions
+smux -CC        # start the session (starts the server if needed)
+smux -CC a      # attach to the existing session
+smux ls         # show the session
 smux kill-server
 ```
+
+smux is deliberately **single-session**: one server, one session, always
+reattached. If a session already exists, `smux -CC` refuses with a pointer
+to `smux -CC a` instead of silently forking a second session. The
+`smux -CC a || smux -CC` idiom therefore always does the right thing.
 
 Typical iTerm2 workflow on a remote host:
 

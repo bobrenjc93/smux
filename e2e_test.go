@@ -108,6 +108,20 @@ func TestE2ELifecycleAndSSHDrop(t *testing.T) {
 	c1.write("send -t %0 -l \"echo SURVIVE-ME; sleep 300 &\"\rsend -H -t %0 0d\r")
 	c1.readUntil("SURVIVE-ME", 10*time.Second)
 
+	// 2b. A second `smux -CC` must refuse (single-session model) with a
+	// plain-text pointer to attach, before any control-mode bytes.
+	dup := exec.Command(testBin, "-CC")
+	dup.Env = append(envWithout(os.Environ(), "TMUX", "SMUX"),
+		"SMUX_TMPDIR="+tmpdir, "SHELL=/bin/sh")
+	dupOut, dupErr := dup.CombinedOutput()
+	if dupErr == nil {
+		t.Fatal("second smux -CC should fail while a session exists")
+	}
+	if !strings.Contains(string(dupOut), "already exists") ||
+		strings.Contains(string(dupOut), "\033P1000p") {
+		t.Fatalf("second smux -CC output = %q", dupOut)
+	}
+
 	// 3. Hard-kill the client (SSH connection dropped). The server and
 	// session must be unaffected.
 	c1.cmd.Process.Kill()

@@ -46,6 +46,16 @@ type iterm struct {
 }
 
 func dialControl(t *testing.T, sock, mode string) *iterm {
+	it, reply := dialControlHeader(t, sock, mode)
+	if !reply.OK {
+		t.Fatalf("hello %q rejected: %s", mode, reply.Error)
+	}
+	return it
+}
+
+// dialControlHeader connects and returns the pre-flight header reply
+// without failing on rejection.
+func dialControlHeader(t *testing.T, sock, mode string) (*iterm, helloReply) {
 	t.Helper()
 	conn, err := net.Dial("unix", sock)
 	if err != nil {
@@ -55,7 +65,17 @@ func dialControl(t *testing.T, sock, mode string) *iterm {
 	if _, err := conn.Write(append(hb, '\n')); err != nil {
 		t.Fatal(err)
 	}
-	return &iterm{t: t, conn: conn, r: bufio.NewReader(conn)}
+	r := bufio.NewReader(conn)
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	line, err := r.ReadString('\n')
+	if err != nil {
+		t.Fatalf("hello header: %v", err)
+	}
+	var reply helloReply
+	if err := json.Unmarshal([]byte(line), &reply); err != nil {
+		t.Fatalf("hello header %q: %v", line, err)
+	}
+	return &iterm{t: t, conn: conn, r: r}, reply
 }
 
 func (it *iterm) close() { it.conn.Close() }
@@ -303,21 +323,36 @@ func TestHandshakeNewSession(t *testing.T) {
 
 func TestAttachWithNoSessionsFails(t *testing.T) {
 	_, sock := startTestServer(t)
-	it := dialControl(t, sock, "attach")
+	it, reply := dialControlHeader(t, sock, "attach")
 	defer it.close()
-	it.expectDCS()
-	begin := it.readLine()
-	if !strings.HasPrefix(begin, "%begin ") || !strings.HasSuffix(begin, " 0") {
-		t.Fatalf("expected flags-0 %%begin, got %q", begin)
+	if reply.OK || !strings.Contains(reply.Error, "no session") {
+		t.Errorf("attach header = %+v", reply)
 	}
-	if body := it.readLine(); body != "no sessions" {
-		t.Errorf("body = %q", body)
+}
+
+// TestSingleSessionEnforced: smux allows at most one session. A second
+// `smux -CC` must be rejected before control mode starts, pointing the
+// user at attach; a concurrent attach still works.
+func TestSingleSessionEnforced(t *testing.T) {
+	_, sock := startTestServer(t)
+	it := dialControl(t, sock, "new")
+	defer it.close()
+	it.attach()
+
+	it2, reply := dialControlHeader(t, sock, "new")
+	it2.close()
+	if reply.OK || !strings.Contains(reply.Error, "already exists") ||
+		!strings.Contains(reply.Error, "smux -CC a") {
+		t.Errorf("second new header = %+v", reply)
 	}
-	if e := it.readLine(); !strings.HasPrefix(e, "%error ") {
-		t.Errorf("expected %%error, got %q", e)
-	}
-	if e := it.readLine(); e != "%exit" {
-		t.Errorf("expected %%exit, got %q", e)
+
+	// The in-protocol path is also guarded (covers the pre-flight race).
+	it.mustErr(`new-session -s extra`)
+
+	it3 := dialControl(t, sock, "attach")
+	defer it3.close()
+	if sc := it3.attach(); sc != "%session-changed $0 0" {
+		t.Errorf("attach session-changed = %q", sc)
 	}
 }
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -98,6 +99,27 @@ func runControlClient(sock string, attach bool) int {
 		return 1
 	}
 
+	// The server answers with a one-line JSON header before any control
+	// bytes; errors (like "a session already exists") surface here as
+	// plain terminal text rather than inside a control stream the
+	// terminal app would swallow.
+	br := bufio.NewReader(conn)
+	header, err := br.ReadString('\n')
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "smux: server closed connection: %v\n", err)
+		return 1
+	}
+	var reply helloReply
+	if err := json.Unmarshal([]byte(header), &reply); err != nil {
+		fmt.Fprintf(os.Stderr, "smux: incompatible server version; "+
+			"restart it with: smux kill-server\n")
+		return 1
+	}
+	if !reply.OK {
+		fmt.Fprintf(os.Stderr, "smux: %s\n", reply.Error)
+		return 1
+	}
+
 	// Raw mode: the control protocol must not be echoed or line-buffered,
 	// and output must pass through untranslated.
 	oldState, rawErr := makeRaw(int(os.Stdin.Fd()))
@@ -114,8 +136,8 @@ func runControlClient(sock string, attach bool) int {
 	signal.Notify(sigc, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGINT)
 
 	errc := make(chan error, 2)
-	go func() { // server -> stdout
-		_, err := io.Copy(os.Stdout, conn)
+	go func() { // server -> stdout (via br: it may buffer past the header)
+		_, err := io.Copy(os.Stdout, br)
 		errc <- err
 	}()
 	go func() { // stdin -> server
