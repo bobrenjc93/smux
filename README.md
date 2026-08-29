@@ -24,10 +24,17 @@ Typical iTerm2 workflow on a remote host:
 ssh myhost -t 'smux -CC a || smux -CC'
 ```
 
-Run that inside iTerm2 and it opens the session as native windows/tabs.
-If the SSH connection drops, everything keeps running server-side; SSH back
-in, run `smux -CC a`, and iTerm2 restores your tabs, including scrollback,
-with all shells and processes intact.
+Run that inside iTerm2 (or any tmux-control-mode client, e.g. dispatcher)
+and it opens the session as native windows/tabs. If the SSH connection
+drops, everything keeps running server-side; SSH back in, run `smux -CC a`,
+and your tabs are restored, including scrollback, with all shells and
+processes intact.
+
+**Don't run `smux -CC` inside an existing tmux/smux session** (e.g. inside
+a pane of a `tmux -CC` integration you're replacing). The outer multiplexer
+swallows the control stream, so your terminal app never sees it. smux
+refuses to start in that situation, like tmux does; run it from a plain
+tab with a fresh SSH connection instead.
 
 ## Scope
 

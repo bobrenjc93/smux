@@ -39,14 +39,24 @@ func TestDifferentialAgainstTmux(t *testing.T) {
 		`detach`,
 	}
 
+	// The scripted `detach` leaves both servers running with a live
+	// session; kill them afterwards or every test run leaks a server.
+	tmuxSock := fmt.Sprintf("smux-diff-%d", os.Getpid())
+	defer exec.Command(tmuxPath, "-L", tmuxSock, "kill-server").Run()
 	tmuxSkel := runSkeleton(t, tmuxPath,
-		[]string{"-CC", "-f", "/dev/null", "-L", fmt.Sprintf("smux-diff-%d", os.Getpid()), "new-session"},
+		[]string{"-CC", "-f", "/dev/null", "-L", tmuxSock, "new-session"},
 		nil, script)
+
 	smuxDir, err := os.MkdirTemp("/tmp", "smux-diff")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(smuxDir)
+	defer func() {
+		kill := exec.Command(testBin, "kill-server")
+		kill.Env = append(os.Environ(), "SMUX_TMPDIR="+smuxDir)
+		kill.Run()
+	}()
 	smuxSkel := runSkeleton(t, testBin, []string{"-CC"},
 		[]string{"SMUX_TMPDIR=" + smuxDir}, script)
 
@@ -59,7 +69,8 @@ func TestDifferentialAgainstTmux(t *testing.T) {
 func runSkeleton(t *testing.T, bin string, args, extraEnv, script []string) []string {
 	t.Helper()
 	cmd := exec.Command(bin, args...)
-	cmd.Env = append(append(os.Environ(), "SHELL=/bin/sh"), extraEnv...)
+	cmd.Env = append(append(envWithout(os.Environ(),
+		"TMUX", "TMUX_PANE", "SMUX", "SMUX_PANE"), "SHELL=/bin/sh"), extraEnv...)
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
 		t.Fatal(err)

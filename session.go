@@ -102,12 +102,17 @@ func (s *Server) newWindowLocked(sess *Session, dir string) (*Window, error) {
 		shell = "/bin/sh"
 	}
 	cmd := exec.Command(shell)
-	cmd.Env = append(os.Environ(),
+	// The server may itself have been started from inside a tmux pane;
+	// pane shells must not inherit the outer multiplexer's markers.
+	env := envWithout(os.Environ(),
+		"TMUX", "TMUX_PANE", "STY", "WINDOW", "TERM_PROGRAM", "TERM_PROGRAM_VERSION")
+	cmd.Env = append(env,
 		"TERM=xterm-256color",
+		fmt.Sprintf("SMUX=%s,%d", s.sock, sess.id),
 		fmt.Sprintf("SMUX_PANE=%%%d", p.id),
 		// Some tools change behavior when they think they are inside tmux;
 		// we intentionally do NOT set TMUX to avoid claiming full tmux
-		// compatibility inside the shell.
+		// compatibility inside the shell. SMUX marks the nesting instead.
 	)
 	if dir == "" {
 		dir = homeDir()
@@ -333,6 +338,24 @@ func killPane(p *Pane) {
 	if p.cmd.Process != nil {
 		syscall.Kill(-p.cmd.Process.Pid, syscall.SIGHUP)
 	}
+}
+
+// envWithout returns env minus the named variables.
+func envWithout(env []string, names ...string) []string {
+	out := env[:0:0]
+	for _, kv := range env {
+		drop := false
+		for _, name := range names {
+			if len(kv) > len(name) && kv[len(name)] == '=' && kv[:len(name)] == name {
+				drop = true
+				break
+			}
+		}
+		if !drop {
+			out = append(out, kv)
+		}
+	}
+	return out
 }
 
 func homeDir() string {

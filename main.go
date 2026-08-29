@@ -62,6 +62,19 @@ func main() {
 	sock := socketPath(socketName)
 
 	if controlMode {
+		// Refuse to start control mode inside an existing tmux or smux
+		// pane (mirroring tmux's nesting guard). The outer multiplexer
+		// would swallow our control stream as an unterminated DCS string
+		// and the front-end (iTerm2/dispatcher) would never see it.
+		for _, env := range []string{"TMUX", "SMUX"} {
+			if os.Getenv(env) != "" {
+				fmt.Fprintf(os.Stderr, "smux: sessions should be nested with care; "+
+					"this shell is already inside a %s session (unset $%s to force).\n"+
+					"Run smux -CC from a plain terminal, e.g. a fresh ssh connection.\n",
+					map[string]string{"TMUX": "tmux", "SMUX": "smux"}[env], env)
+				os.Exit(1)
+			}
+		}
 		attach := false
 		if len(rest) > 0 {
 			switch rest[0] {

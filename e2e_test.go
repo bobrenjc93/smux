@@ -42,7 +42,10 @@ type e2eClient struct {
 func startClient(t *testing.T, tmpdir string, args ...string) *e2eClient {
 	t.Helper()
 	cmd := exec.Command(testBin, args...)
-	cmd.Env = append(os.Environ(), "SMUX_TMPDIR="+tmpdir, "SHELL=/bin/sh")
+	// Scrub multiplexer markers so the nesting guard doesn't fire when the
+	// test suite itself runs inside tmux/smux.
+	cmd.Env = append(envWithout(os.Environ(), "TMUX", "TMUX_PANE", "SMUX", "SMUX_PANE"),
+		"SMUX_TMPDIR="+tmpdir, "SHELL=/bin/sh")
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
 		t.Fatal(err)
@@ -149,9 +152,30 @@ func TestE2EAttachNoServer(t *testing.T) {
 	defer os.RemoveAll(tmpdir)
 
 	cmd := exec.Command(testBin, "-CC", "a")
-	cmd.Env = append(os.Environ(), "SMUX_TMPDIR="+tmpdir)
+	cmd.Env = append(envWithout(os.Environ(), "TMUX", "SMUX"), "SMUX_TMPDIR="+tmpdir)
 	out, _ := cmd.CombinedOutput()
 	if !strings.Contains(string(out), "no server running") {
 		t.Errorf("expected friendly error, got %q", out)
+	}
+}
+
+// TestE2ERefusesNesting: starting control mode inside an existing tmux or
+// smux pane must fail fast with a clear message — the outer multiplexer
+// would swallow the control stream as an unterminated DCS string and the
+// front-end would never see it.
+func TestE2ERefusesNesting(t *testing.T) {
+	if testBin == "" {
+		t.Skip("smux binary unavailable")
+	}
+	for _, env := range []string{"TMUX=/tmp/tmux-0/default,1,0", "SMUX=/tmp/smux-0/default,0"} {
+		cmd := exec.Command(testBin, "-CC")
+		cmd.Env = append(envWithout(os.Environ(), "TMUX", "SMUX"), env)
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Errorf("%s: smux -CC should refuse to nest", env)
+		}
+		if !strings.Contains(string(out), "nested with care") {
+			t.Errorf("%s: message = %q", env, out)
+		}
 	}
 }
