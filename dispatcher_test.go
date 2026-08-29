@@ -307,6 +307,72 @@ func TestDispatcherSizingContract(t *testing.T) {
 	it.mustOK("resize-pane -t %0 -R 10")
 }
 
+// TestDispatcherReattachRestoresTabs: after an abrupt disconnect,
+// `smux -CC a` must present dispatcher with the identical window snapshot —
+// ids, names, order, active window, and connection key — so it re-adopts
+// its tabs, plus capture-pane content for each pane.
+func TestDispatcherReattachRestoresTabs(t *testing.T) {
+	_, sock := startTestServer(t)
+	it := dialControl(t, sock, "new")
+	it.attach()
+	it.mustOK("refresh-client -C 80x24")
+
+	// Build up state: three tabs, two renamed, middle one active.
+	it.mustOK("new-window -a -t @0")
+	it.waitNotify("%window-add ")
+	it.mustOK("new-window -a -t @1")
+	it.waitNotify("%window-add ")
+	it.mustOK(`rename-window -t @0 "build tab"`)
+	it.waitNotify("%window-renamed ")
+	it.mustOK(`rename-window -t @2 "logs"`)
+	it.waitNotify("%window-renamed ")
+	it.mustOK("select-window -t @1")
+	it.waitNotify("%session-window-changed ")
+	it.send(`send-keys -t %1 -H 65 63 68 6f 20 54 41 42 2d 53 54 41 54 45 0d`) // echo TAB-STATE
+	it.readBlock()
+	it.captureUntil("%1", "TAB-STATE")
+
+	snapshot := func(c *iterm) []string {
+		c.send("list-windows -F " + dispatcherWindowFmt)
+		b, _ := c.readBlock()
+		if b.isErr {
+			t.Fatalf("list-windows: %v", b.body)
+		}
+		return b.body
+	}
+	before := snapshot(it)
+
+	// Abrupt disconnect (SSH death), then reattach.
+	it.close()
+	time.Sleep(300 * time.Millisecond)
+	it2 := dialControl(t, sock, "attach")
+	defer it2.close()
+	it2.attach()
+
+	after := snapshot(it2)
+	if strings.Join(before, "\n") != strings.Join(after, "\n") {
+		t.Errorf("window snapshot changed across reattach:\nbefore: %v\nafter:  %v", before, after)
+	}
+	// Spot-check the fields dispatcher keys tabs on.
+	fields := strings.Split(after[0], "\t")
+	if fields[0] != "@0" || fields[1] != "build tab" || fields[2] != "0" {
+		t.Errorf("window @0 snapshot: %q", after[0])
+	}
+	f1 := strings.Split(after[1], "\t")
+	if f1[0] != "@1" || f1[2] != "1" { // still the active window
+		t.Errorf("window @1 snapshot: %q", after[1])
+	}
+	f2 := strings.Split(after[2], "\t")
+	if f2[1] != "logs" {
+		t.Errorf("window @2 snapshot: %q", after[2])
+	}
+	// Content restore for the active pane.
+	got := it2.captureUntil("%1", "TAB-STATE")
+	if got == "" {
+		t.Error("no content restored")
+	}
+}
+
 func TestDispatcherReloadNudge(t *testing.T) {
 	_, sock := startTestServer(t)
 	it := dialControl(t, sock, "new")
