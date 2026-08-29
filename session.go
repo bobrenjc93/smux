@@ -108,10 +108,12 @@ func (s *Server) newWindowLocked(sess *Session, dir string) (*Window, error) {
 		shell = "/bin/sh"
 	}
 	cmd := exec.Command(shell)
-	// The server may itself have been started from inside a tmux pane;
-	// pane shells must not inherit the outer multiplexer's markers.
+	// The server may itself have been started from inside a tmux or smux
+	// pane (guard overridden); pane shells must not inherit the outer
+	// multiplexer's markers — fresh SMUX values are appended below.
 	env := envWithout(os.Environ(),
-		"TMUX", "TMUX_PANE", "STY", "WINDOW", "TERM_PROGRAM", "TERM_PROGRAM_VERSION")
+		"TMUX", "TMUX_PANE", "SMUX", "SMUX_PANE", "STY", "WINDOW",
+		"TERM_PROGRAM", "TERM_PROGRAM_VERSION")
 	cmd.Env = append(env,
 		"TERM=xterm-256color",
 		fmt.Sprintf("SMUX=%s,%d", s.sock, sess.id),
