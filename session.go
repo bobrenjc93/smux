@@ -161,6 +161,14 @@ func (s *Server) paneReadLoop(p *Pane) {
 			data := buf[:n]
 			s.mu.Lock()
 			p.vt.Feed(data)
+			// A query in that output is owed an answer typed back at the
+			// program. Written before the %output notification goes out so a
+			// program that blocks on the reply is never waiting on a client.
+			if replies := p.vt.TakeReplies(); len(replies) > 0 {
+				if _, err := p.ptmx.Write(replies); err != nil {
+					s.logger.Printf("pane %%%d: writing terminal query reply: %v", p.id, err)
+				}
+			}
 			p.window.session.activity = time.Now()
 			line := fmt.Sprintf("%%output %%%d %s", p.id, escapeOutput(data))
 			for c := range s.clients {

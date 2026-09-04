@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"unicode/utf8"
 )
@@ -35,6 +36,18 @@ type VT struct {
 	escBuf       []byte
 	oscBuf       []byte
 	stTerminal   bool // parsing string sequence terminated by ST/BEL
+
+	// Answers owed to the program, to be written back to its pty.
+	//
+	// A pane's program cannot tell what it is attached to except by asking,
+	// and it asks by writing a query and waiting for the terminal to type the
+	// answer back. Passing the query through to the real terminal is not
+	// enough: the reply would arrive as input to whatever the client decides,
+	// not to the pane that asked. So the multiplexer has to answer for
+	// itself, exactly as tmux does. Left unanswered, programs conclude the
+	// terminal is primitive — Claude Code, for one, stops using italics and
+	// underlines everything instead.
+	replies []byte
 }
 
 type vtAttr struct {
@@ -48,6 +61,9 @@ type vtAttr struct {
 }
 
 var defaultAttr = vtAttr{fg: -1, bg: -1}
+
+// vtVersion is what XTVERSION reports; main.go points it at the build stamp.
+var vtVersion = "dev"
 
 type vtCell struct {
 	text  string // one grapheme (may include combining marks); "" = blank
@@ -246,6 +262,26 @@ func (v *VT) feedEsc(c byte) int {
 	return 1
 }
 
+// TakeReplies returns and clears anything the program is owed in answer to a
+// query it made. The caller writes it to the pane's pty.
+func (v *VT) TakeReplies() []byte {
+	if len(v.replies) == 0 {
+		return nil
+	}
+	out := v.replies
+	v.replies = nil
+	return out
+}
+
+func (v *VT) reply(s string) {
+	// Bounded: a program that spams queries faster than they are drained must
+	// not be able to grow this without limit.
+	if len(v.replies) > 64*1024 {
+		return
+	}
+	v.replies = append(v.replies, s...)
+}
+
 func (v *VT) endString() {
 	// The only string we retain is the title (OSC 0/2 or screen ESC k).
 	// Control characters are stripped: the title is embedded in protocol
@@ -257,6 +293,13 @@ func (v *VT) endString() {
 		return r
 	}, string(v.oscBuf))
 	if v.stTerminal {
+		// OSC 11 background query. Programs use the answer to pick a light or
+		// dark palette; unanswered, they guess, and guess wrong as often as
+		// not. smux has no window of its own, so it answers for the dark
+		// background its clients actually draw on.
+		if s == "11;?" {
+			v.reply("\x1b]11;rgb:0000/0000/0000\x1b\\")
+		}
 		if strings.HasPrefix(s, "0;") || strings.HasPrefix(s, "2;") {
 			v.title = s[2:]
 		} else if !strings.Contains(s, ";") && s != "" {
@@ -492,6 +535,29 @@ func (v *VT) dispatchCSI() {
 		}
 	case 'm':
 		v.applySGR(params, body)
+	case 'c':
+		switch private {
+		case "":
+			// DA1. "VT100 with advanced video option", which is what xterm
+			// and tmux both answer and what callers test for to decide they
+			// are talking to something capable.
+			v.reply("\x1b[?1;2c")
+		case ">":
+			// DA2: terminal type 84 ("xterm"), version, cartridge. Reporting
+			// xterm's identity rather than inventing one keeps callers on
+			// their well-tested path.
+			v.reply("\x1b[>84;0;0c")
+		}
+	case 'n':
+		if private == "" && p0(0, 0) == 6 {
+			// CPR. Coordinates are 1-based on the wire.
+			v.reply(fmt.Sprintf("\x1b[%d;%dR", v.cy+1, v.cx+1))
+		}
+	case 'q':
+		if private == ">" {
+			// XTVERSION.
+			v.reply("\x1bP>|smux " + vtVersion + "\x1b\\")
+		}
 	}
 }
 

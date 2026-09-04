@@ -15,6 +15,8 @@ import (
 // -ldflags "-X main.version=v1.2.3".
 var version = "dev"
 
+func init() { vtVersion = version }
+
 func usage() {
 	fmt.Fprintf(os.Stderr, `usage:
   smux -CC            start the session and attach in control mode

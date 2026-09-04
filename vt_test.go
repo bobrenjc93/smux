@@ -205,3 +205,60 @@ func TestVTDefaultTrimsTrailingBlanks(t *testing.T) {
 		t.Errorf("capture = %q", got)
 	}
 }
+
+// A pane's program identifies its terminal by writing a query and waiting for
+// the answer to be typed back. Unanswered, capable programs downgrade
+// themselves: Claude Code stops emitting italics and underlines everything
+// instead, which is what these queries going unanswered actually looked like.
+func TestVTAnswersTerminalQueries(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		query string
+		want  string
+	}{
+		{"DA1", "\x1b[c", "\x1b[?1;2c"},
+		{"DA2", "\x1b[>c", "\x1b[>84;0;0c"},
+		{"XTVERSION", "\x1b[>q", "\x1bP>|smux dev\x1b\\"},
+		{"OSC 11 background", "\x1b]11;?\x1b\\", "\x1b]11;rgb:0000/0000/0000\x1b\\"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := feedVT(t, 20, 5, tc.query)
+			if got := string(v.TakeReplies()); got != tc.want {
+				t.Errorf("reply = %q, want %q", got, tc.want)
+			}
+			if got := v.TakeReplies(); got != nil {
+				t.Errorf("reply was not drained: %q", got)
+			}
+		})
+	}
+}
+
+func TestVTCursorPositionReport(t *testing.T) {
+	// CPR is 1-based on the wire and must describe the pane's own cursor, not
+	// wherever the client happens to be drawing.
+	v := feedVT(t, 20, 5, "hello\r\nworld\x1b[6n")
+	if got, want := string(v.TakeReplies()), "\x1b[2;6R"; got != want {
+		t.Errorf("CPR = %q, want %q", got, want)
+	}
+}
+
+func TestVTIgnoresQueriesItDoesNotAnswer(t *testing.T) {
+	// Answering a query with the wrong shape is worse than silence: the
+	// program would read it as input. Only the forms above get a reply.
+	for _, q := range []string{"\x1b[5n", "\x1b[?1;2c", "\x1b]11;rgb:1/2/3\x1b\\", "\x1b[q"} {
+		v := feedVT(t, 20, 5, q)
+		if got := v.TakeReplies(); got != nil {
+			t.Errorf("%q unexpectedly answered with %q", q, got)
+		}
+	}
+}
+
+func TestVTReplyBufferIsBounded(t *testing.T) {
+	// A program that queries faster than the reader drains must not be able
+	// to grow this without limit.
+	v := NewVT(20, 5, 100)
+	v.Feed([]byte(strings.Repeat("\x1b[c", 50000)))
+	if n := len(v.TakeReplies()); n > 128*1024 {
+		t.Errorf("reply buffer grew to %d bytes", n)
+	}
+}
