@@ -262,3 +262,37 @@ func TestVTReplyBufferIsBounded(t *testing.T) {
 		t.Errorf("reply buffer grew to %d bytes", n)
 	}
 }
+
+// A private-prefixed `m` is not SGR. Claude Code sends `\033[>4;2m`
+// (XTMODKEYS, "encode modified keys this way") the moment it starts, and
+// reading its parameters as attributes set underline and dim on the pane —
+// so every cell written from then on was stored, and captured, underlined.
+// The same session under tmux looked right, because tmux ignores these.
+func TestVTIgnoresPrivateCSIm(t *testing.T) {
+	for _, seq := range []string{"\033[>4;2m", "\033[>4m", "\033[?4m", "\033[<4;2m"} {
+		v := feedVT(t, 20, 3, seq+"plain")
+		if v.attr.under || v.attr.dim {
+			t.Errorf("%q set attributes: under=%v dim=%v", seq, v.attr.under, v.attr.dim)
+		}
+		if got := captureEscapes(v); strings.Contains(got, "4m") {
+			t.Errorf("%q left the capture underlined: %q", seq, got)
+		}
+	}
+}
+
+// The ordinary form still works, or the fix would have cost underline itself.
+func TestVTStillTracksUnderline(t *testing.T) {
+	v := feedVT(t, 20, 3, "\033[4mab\033[24mcd")
+	got := captureEscapes(v)
+	if !strings.Contains(got, "4mab") {
+		t.Errorf("underline lost: %q", got)
+	}
+	if strings.Contains(got, "4mcd") {
+		t.Errorf("underline outlived its reset: %q", got)
+	}
+}
+
+func captureEscapes(v *VT) string {
+	p := &Pane{vt: v}
+	return p.capture(captureOpts{escapes: true})
+}

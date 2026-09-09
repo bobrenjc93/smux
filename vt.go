@@ -534,6 +534,16 @@ func (v *VT) dispatchCSI() {
 			}
 		}
 	case 'm':
+		if private != "" {
+			// Not SGR. `CSI > Pm ; Pm m` is XTMODKEYS, an application telling
+			// the terminal how to encode modified keys, and `CSI ? Pm m`
+			// queries it. Reading the parameters as attributes turns the
+			// `\033[>4;2m` that Claude Code sends at startup into underline
+			// plus dim, and every cell written afterwards is stored — and
+			// captured — underlined. tmux ignores these, which is why the
+			// same session looks right under tmux and wrong here.
+			break
+		}
 		v.applySGR(params, body)
 	case 'c':
 		switch private {
