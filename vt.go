@@ -328,7 +328,11 @@ func (v *VT) line(y int) *vtLine {
 func (v *VT) putCell(x, y int, cell vtCell) {
 	l := v.line(y)
 	for len(l.cells) <= x {
-		l.cells = append(l.cells, vtCell{width: 1})
+		// Padding for a cursor that jumped past the end of the line. These
+		// cells were never written, so they are blank in the full sense --
+		// defaultAttr, not the zero vtAttr, whose fg and bg are colour 0.
+		// Black is a colour, and capture -e faithfully writes it out as one.
+		l.cells = append(l.cells, vtCell{width: 1, attr: defaultAttr})
 	}
 	l.cells[x] = cell
 }

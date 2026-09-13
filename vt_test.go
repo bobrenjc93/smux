@@ -296,3 +296,22 @@ func captureEscapes(v *VT) string {
 	p := &Pane{vt: v}
 	return p.capture(captureOpts{escapes: true})
 }
+
+func TestVTCursorPaddingKeepsDefaultAttrs(t *testing.T) {
+	// A TUI that jumps the cursor rather than writing spaces: move to column
+	// 11 on an empty line and print there. The skipped cells are padding, and
+	// padding is blank -- it must not carry a colour.
+	//
+	// Getting this wrong is invisible on a terminal whose background really is
+	// black and obvious on one whose background is anything else: the capture
+	// paints every gap with an explicit black, so the padding shows up as
+	// black rectangles between the words.
+	v := feedVT(t, 40, 5, "\x1b[11Gtext")
+	got := (&Pane{vt: v}).capture(captureOpts{escapes: true})
+	if strings.Contains(got, "30") || strings.Contains(got, "40") {
+		t.Errorf("padding was given an explicit colour: %q", got)
+	}
+	if got != "          text" {
+		t.Errorf("capture = %q", got)
+	}
+}
