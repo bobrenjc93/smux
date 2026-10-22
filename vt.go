@@ -36,6 +36,7 @@ type VT struct {
 	escBuf       []byte
 	oscBuf       []byte
 	stTerminal   bool // parsing string sequence terminated by ST/BEL
+	stEndedBEL   bool // the string just ended was terminated by BEL, not ST
 
 	// Answers owed to the program, to be written back to its pty.
 	//
@@ -198,9 +199,11 @@ func (v *VT) Feed(data []byte) {
 		case stString:
 			// Consume until BEL or ST (ESC \).
 			if c == 0x07 {
+				v.stEndedBEL = true
 				v.endString()
 				v.state = stGround
 			} else if c == 0x1b && i+1 < len(data) && data[i+1] == '\\' {
+				v.stEndedBEL = false
 				v.endString()
 				v.state = stGround
 				i++
@@ -293,12 +296,28 @@ func (v *VT) endString() {
 		return r
 	}, string(v.oscBuf))
 	if v.stTerminal {
-		// OSC 11 background query. Programs use the answer to pick a light or
-		// dark palette; unanswered, they guess, and guess wrong as often as
-		// not. smux has no window of its own, so it answers for the dark
-		// background its clients actually draw on.
-		if s == "11;?" {
-			v.reply("\x1b]11;rgb:0000/0000/0000\x1b\\")
+		// OSC 10/11 foreground and background queries. Programs use the
+		// answers to pick a light or dark palette; unanswered, they guess, and
+		// guess wrong as often as not. smux has no window of its own, so it
+		// answers for the light-on-dark its clients actually draw.
+		//
+		// Both have to be answered here. Left to the client, the answer
+		// arrives a network round trip after the DA1 or CPR that smux sent
+		// straight back, and programs use that reply as their cue to stop
+		// waiting: the late colour lands in the program's input and is read
+		// as typing.
+		//
+		// The reply ends the way the query did, as xterm's does; some callers
+		// only look for the terminator they sent.
+		end := "\x1b\\"
+		if v.stEndedBEL {
+			end = "\x07"
+		}
+		switch s {
+		case "10;?":
+			v.reply("\x1b]10;rgb:ffff/ffff/ffff" + end)
+		case "11;?":
+			v.reply("\x1b]11;rgb:0000/0000/0000" + end)
 		}
 		if strings.HasPrefix(s, "0;") || strings.HasPrefix(s, "2;") {
 			v.title = s[2:]

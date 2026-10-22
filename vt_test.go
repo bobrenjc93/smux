@@ -220,6 +220,9 @@ func TestVTAnswersTerminalQueries(t *testing.T) {
 		{"DA2", "\x1b[>c", "\x1b[>84;0;0c"},
 		{"XTVERSION", "\x1b[>q", "\x1bP>|smux dev\x1b\\"},
 		{"OSC 11 background", "\x1b]11;?\x1b\\", "\x1b]11;rgb:0000/0000/0000\x1b\\"},
+		{"OSC 11 background, BEL", "\x1b]11;?\x07", "\x1b]11;rgb:0000/0000/0000\x07"},
+		{"OSC 10 foreground", "\x1b]10;?\x1b\\", "\x1b]10;rgb:ffff/ffff/ffff\x1b\\"},
+		{"OSC 10 foreground, BEL", "\x1b]10;?\x07", "\x1b]10;rgb:ffff/ffff/ffff\x07"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			v := feedVT(t, 20, 5, tc.query)

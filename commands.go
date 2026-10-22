@@ -323,7 +323,11 @@ func (s *Server) targetPane(c *Client, t string) (*Pane, error) {
 
 func (s *Server) baseVars(c *Client) map[string]string {
 	v := map[string]string{
-		"version":             smuxVersion,
+		"version": smuxVersion,
+		// smux's own release, which "version" cannot carry because iTerm2
+		// gates features on it. tmux expands this to nothing, so a client can
+		// tell the two apart, and tell which smux answers which queries.
+		"smux_version":        version,
 		"socket_path":         s.sock,
 		"pid":                 fmt.Sprint(os.Getpid()),
 		"host":                hostname(),
